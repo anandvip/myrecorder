@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Transcriber v2</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #liveNotes {
+            width: 100%;
+            min-height: 300px;
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            line-height: 1.5;
+            overflow-y: hidden;
+        }
+        #alert {
+            padding: 10px;
+            background-color: #f44336;
+            color: white;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+        .speaker {
+            font-weight: bold;
+            color: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Meeting Transcriber v2</h1>
+        <div id="alert"></div>
+        <div class="controls">
+            <button id="startRecording">Start Recording</button>
+            <button id="stopRecording" disabled>Stop Recording</button>
+        </div>
+        <div id="liveNotes" contenteditable="true"></div>
+        <div class="controls">
+            <button id="saveNotes">Export Notes</button>
+        </div>
+    </div>
+
+    <script>
+        // V2 Improvement 1: Use const and let for better variable scoping
+        const startButton = document.getElementById('startRecording');
+        const stopButton = document.getElementById('stopRecording');
+        const liveNotesArea = document.getElementById('liveNotes');
+        const saveButton = document.getElementById('saveNotes');
+        const alertBox = document.getElementById('alert');
+
+        let recognition;
+        let db;
+        let currentSpeaker = 1;
+
+        // V2 Improvement 2: IndexedDB integration
+        const dbName = 'MeetingTranscriptDB';
+        const request = indexedDB.open(dbName, 1);
+
+        request.onerror = (event) => {
+            console.error("IndexedDB error:", event.target.error);
+        };
+
+        request.onsuccess = (event) => {
+            db = event.target.result;
+            loadNotesFromDB();
+        };
+
+        request.onupgradeneeded = (event) => {
+            db = event.target.result;
+            const objectStore = db.createObjectStore('notes', { keyPath: 'id', autoIncrement: true });
+            objectStore.createIndex('timestamp', 'timestamp', { unique: false });
+        };
+
+        function saveNotesToDB(text) {
+            const transaction = db.transaction(['notes'], 'readwrite');
+            const objectStore = transaction.objectStore('notes');
+            const note = { text: text, timestamp: new Date() };
+            objectStore.add(note);
+        }
+
+        function loadNotesFromDB() {
+            const transaction = db.transaction(['notes'], 'readonly');
+            const objectStore = transaction.objectStore('notes');
+            const request = objectStore.getAll();
+
+            request.onsuccess = (event) => {
+                const notes = event.target.result;
+                if (notes.length > 0) {
+                    liveNotesArea.innerHTML = notes.map(note => note.text).join('');
+                    resizeTextArea();
+                }
+            };
+        }
+
+        // V2 Improvement 3: Auto-resizing text area
+        function resizeTextArea() {
+            liveNotesArea.style.height = 'auto';
+            liveNotesArea.style.height = liveNotesArea.scrollHeight + 'px';
+        }
+
+        // V2 Improvement 4: Enhanced error handling
+        function showAlert(message) {
+            alertBox.textContent = message;
+            alertBox.style.display = 'block';
+        }
+
+        // Check for browser support
+        if (!('webkitSpeechRecognition' in window)) {
+            showAlert('Your browser does not support speech recognition. Please try Chrome.');
+            startButton.disabled = true;
+        } else {
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onresult = (event) => {
+                let interimTranscript = '';
+                let finalTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+
+                // V2 Improvement 5: Basic speaker identification
+                if (finalTranscript) {
+                    const speakerSpan = `<span class="speaker">Speaker ${currentSpeaker}: </span>`;
+                    const newContent = speakerSpan + finalTranscript + '<br>';
+                    liveNotesArea.innerHTML += newContent;
+                    saveNotesToDB(newContent);
+                    currentSpeaker = currentSpeaker === 1 ? 2 : 1;
+                    resizeTextArea();
+                    liveNotesArea.scrollTop = liveNotesArea.scrollHeight;
+                }
+            };
+
+            recognition.onerror = (event) => {
+                showAlert('Error occurred in recognition: ' + event.error);
+            };
+        }
+
+        startButton.onclick = () => {
+            recognition.start();
+            startButton.disabled = true;
+            stopButton.disabled = false;
+        };
+
+        stopButton.onclick = () => {
+            recognition.stop();
+            startButton.disabled = false;
+            stopButton.disabled = true;
+        };
+
+        // V2 Improvement 6: Export as HTML to preserve formatting
+        saveButton.onclick = () => {
+            const notes = liveNotesArea.innerHTML;
+            const blob = new Blob([notes], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'meeting_notes.html';
+            a.click();
+        };
+
+        // V2 Improvement 7: Auto-save on content change
+        liveNotesArea.addEventListener('input', () => {
+            saveNotesToDB(liveNotesArea.innerHTML);
+            resizeTextArea();
+        });
+    </script>
+</body>
+</html>
